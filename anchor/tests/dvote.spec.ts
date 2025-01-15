@@ -1,76 +1,89 @@
-import * as anchor from '@coral-xyz/anchor'
-import {Program} from '@coral-xyz/anchor'
-import {Keypair} from '@solana/web3.js'
-import {Dvote} from '../target/types/dvote'
+import * as anchor from "@coral-xyz/anchor";
+import { startAnchor } from "solana-bankrun";
+import { BankrunProvider } from "anchor-bankrun";
+import { Program } from "@coral-xyz/anchor";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { Dvote } from "../target/types/dvote";
+import { publicKey } from "@coral-xyz/anchor/dist/cjs/utils";
+import { useAnchorWallet } from "@solana/wallet-adapter-react";
+const IDL = require("../target/idl/dvote.json");
 
-describe('dvote', () => {
-  // Configure the client to use the local cluster.
-  const provider = anchor.AnchorProvider.env()
-  anchor.setProvider(provider)
-  const payer = provider.wallet as anchor.Wallet
+const votingAddress = new PublicKey(
+  "AsjZ3kWAUSQRNt2pZVeJkywhZ6gpLpHZmJjduPmKZDZZ",
+);
+describe("dvote", () => {
+  let context;
+  let provider;
+  let votingProgram: Program<Dvote>;
+  beforeAll(async () => {
+    context = await startAnchor(
+      "",
+      [{ name: "dvote", programId: votingAddress }],
+      [],
+    );
+    provider = new BankrunProvider(context);
+    votingProgram = new Program<Dvote>(IDL, provider);
+  });
 
-  const program = anchor.workspace.Dvote as Program<Dvote>
+  it("Initialize Dvote", async () => {
+    await votingProgram.methods
+      .initializePoll(
+        new anchor.BN(1), // pollId
+        "What is your favorite character?", // description
+        new anchor.BN(0), // pollStart
+        new anchor.BN(1831840003), // pollEnd
+      )
+      .rpc();
+    const [pollAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8)],
+      votingAddress,
+    );
 
-  const dvoteKeypair = Keypair.generate()
+    const poll = await votingProgram.account.poll.fetch(pollAddress);
 
-  it('Initialize Dvote', async () => {
-    await program.methods
-      .initialize()
-      .accounts({
-        dvote: dvoteKeypair.publicKey,
-        payer: payer.publicKey,
-      })
-      .signers([dvoteKeypair])
-      .rpc()
+    console.log(poll);
 
-    const currentCount = await program.account.dvote.fetch(dvoteKeypair.publicKey)
+    expect(poll.pollId.toNumber()).toEqual(1);
+    expect(poll.description).toEqual("What is your favorite character?");
+    expect(poll.pollStart.toNumber()).toBeLessThan(poll.pollEnd.toNumber());
+  });
 
-    expect(currentCount.count).toEqual(0)
-  })
+  it("Initialize Candidate", async () => {
+    await votingProgram.methods
+      .initializeCandidate("Spongebob", new anchor.BN(1))
+      .rpc();
+    await votingProgram.methods
+      .initializeCandidate("Patrick", new anchor.BN(1))
+      .rpc();
+    const [SpongebobAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8), Buffer.from("Spongebob")],
+      votingAddress,
+    );
+    const SpongebobCandiate =
+      await votingProgram.account.candidate.fetch(SpongebobAddress);
+    console.log(SpongebobCandiate);
+    expect(SpongebobCandiate.candidateVotes.toNumber()).toEqual(0);
+    const [PatrickAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8), Buffer.from("Patrick")],
+      votingAddress,
+    );
+    const PatrickCandiate =
+      await votingProgram.account.candidate.fetch(PatrickAddress);
+    console.log(PatrickCandiate);
+    expect(PatrickCandiate.candidateVotes.toNumber()).toEqual(0);
+  });
 
-  it('Increment Dvote', async () => {
-    await program.methods.increment().accounts({ dvote: dvoteKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.dvote.fetch(dvoteKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(1)
-  })
-
-  it('Increment Dvote Again', async () => {
-    await program.methods.increment().accounts({ dvote: dvoteKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.dvote.fetch(dvoteKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(2)
-  })
-
-  it('Decrement Dvote', async () => {
-    await program.methods.decrement().accounts({ dvote: dvoteKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.dvote.fetch(dvoteKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(1)
-  })
-
-  it('Set dvote value', async () => {
-    await program.methods.set(42).accounts({ dvote: dvoteKeypair.publicKey }).rpc()
-
-    const currentCount = await program.account.dvote.fetch(dvoteKeypair.publicKey)
-
-    expect(currentCount.count).toEqual(42)
-  })
-
-  it('Set close the dvote account', async () => {
-    await program.methods
-      .close()
-      .accounts({
-        payer: payer.publicKey,
-        dvote: dvoteKeypair.publicKey,
-      })
-      .rpc()
-
-    // The account should no longer exist, returning null.
-    const userAccount = await program.account.dvote.fetchNullable(dvoteKeypair.publicKey)
-    expect(userAccount).toBeNull()
-  })
-})
+  it("Vote", async () => {
+    await votingProgram.methods.vote("Spongebob", new anchor.BN(1)).rpc();
+    await votingProgram.methods.vote("Spongebob", new anchor.BN(1)).rpc();
+    await votingProgram.methods.vote("Spongebob", new anchor.BN(1)).rpc();
+    const [SpongebobAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8), Buffer.from("Spongebob")],
+      votingAddress,
+    );
+    const SpongebobCandiate =
+      await votingProgram.account.candidate.fetch(SpongebobAddress);
+    console.log(SpongebobCandiate);
+    expect(SpongebobCandiate.candidateVotes.toNumber()).toEqual(1);
+  });
+});
